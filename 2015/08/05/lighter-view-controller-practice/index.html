@@ -1,20 +1,81 @@
-extends partial/layout
+<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="X-UA-Compatible" content="IE=edge"><title> 轻量级ViewController的实践 · 深谷</title><meta name="description" content="本文主要讲述针对含有TableView的ViewController的瘦身实践。"><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="short icon" href="/favicon.png"><link rel="stylesheet" href="/css/apollo.css"><link rel="stylesheet" href="http://fonts.useso.com/css?family=Source+Sans+Pro:400,600" type="text/css"></head><body><div class="wrap"><header><a href="/" class="logo-link"><img src="/favicon.png"></a><ul class="nav nav-list"><li class="nav-list-item"><a href="/" target="_self" class="nav-list-link">BLOG</a></li><li class="nav-list-item"><a href="/archives/" target="_self" class="nav-list-link">ARCHIVE</a></li><li class="nav-list-item"><a href="https://github.com/yiyangest" target="_blank" class="nav-list-link">GITHUB</a></li><li class="nav-list-item"><a href="/atom.xml" target="_self" class="nav-list-link">RSS</a></li></ul></header><section class="container"><div class="post"><article class="post-block"><h1 class="post-title">轻量级ViewController的实践</h1><div class="post-time">2015年8月5日</div><div class="post-content"><h2 id="废话太多的前言"><a href="#废话太多的前言" class="headerlink" title="废话太多的前言"></a>废话太多的前言</h2><p>在大多数情况下，ViewController都是我们代码中的重点，贯穿开发过程的始终。ViewController作为我们通常所理解的<code>MVC</code>模式中的<code>C</code>部分，承载了太多的责任和内容。</p>
+<blockquote>
+<p>ViewController是View和Model之间的纽带，它将Model背后所代表的业务知识转化成View所能理解的语言。当然iOS中的ViewController工作不仅限于此，它还包括：管理自己的生命周期，负责生成并管理自己的所有view实例，监听并处理来自View和业务相关的事件通知等等。</p>
+</blockquote>
+<a id="more"></a>
+<p>我们再对比看看View和Model所负责的事情：</p>
+<ul>
+<li>View: 毫无争议的只负责呈现UI相关的内容，同时包括产生一些事件，如点击或者触摸。</li>
+<li>Model: 建立业务模型，给冷冰冰的数字赋予生命。关于Model还有一些争议，就是这些模型数据的存储与处理，是否应当属于Model的职责范围，这个问题只能说见仁见智吧，没有标准答案。</li>
+</ul>
+<p>相较之下，毫无疑问，ViewController绝对是重量级选手，View和Model都有相对比较独立的关注点，而ViewController则要为他们二者之间的交流问题操碎了心。于是我们会很容易得看到随着产品的迭代，需求的增长，ViewController也变得越来越臃肿。</p>
+<p>我刚刚开始接触iOS开发的那段时间，兴高采烈的将公司iOS app的源代码checkout到本地，找到用户登录后第一个展现的FeedViewController, 2000多行，瞬间读下去的欲望降低50%。</p>
+<p>当然从一开始的时候，人们就会从架构上为ViewController减轻负担，分离出网络请求层，分离出数据存储层等等。除开这些常见的模式之外呢，还有什么手段能够为ViewController瘦身？</p>
+<p><a href="http://www.objc.io/issues/1-view-controllers/lighter-view-controllers/" target="_blank" rel="noopener">objc.io第一期</a>就围绕这个话题展开，主要是将TableViewDataSource封装成一个单独的对象，来达到给ViewController瘦身的目的，当然文中还提到了一些其他的方法，不过并不在本文的讨论范围之内。本文主要讲述针对含有TableView的VC的瘦身实践。实践必然会有成果，成果在<a href="https://github.com/yiyangest/KKTableView" target="_blank" rel="noopener">这里</a>，如果觉得有用的话，也是可以通过</p>
+<pre><code>pod &apos;KKTableView&apos;, :git=&gt;&apos;https://github.com/yiyangest/KKTableView.git&apos;
+</code></pre><p>的方式来加入到你的工程之中（目前还没有将KKTableView注册到CocoaPods的公共库中，所以暂时用<code>:git=&gt;</code>的方式来集成）。</p>
+<h2 id="千篇一律的UITableViewDataSource"><a href="#千篇一律的UITableViewDataSource" class="headerlink" title="千篇一律的UITableViewDataSource"></a>千篇一律的UITableViewDataSource</h2><p>UITableView有两个重要的protocol: <code>UITableViewDataSource</code>和<code>UITableViewDelegate</code>, 一个负责提供tableView所需的数据模型, 一个负责tableView可视化上的定制效果。一般来说delegate每个VC需要实现的内容都不一样，VC究竟会实现其中的哪几个方法也是不确定的，因此对delegate进行抽象的话，个人感觉意义不是很大。</p>
+<p>而dataSource，有两个必须实现的方法:</p>
+<figure class="highlight objc"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">- (<span class="built_in">NSInteger</span>)tableView:(<span class="built_in">UITableView</span> *)tableView numberOfRowsInSection:(<span class="built_in">NSInteger</span>)section;</span><br><span class="line">- (<span class="built_in">UITableViewCell</span> *)tableView:(<span class="built_in">UITableView</span> *)tableView cellForRowAtIndexPath:(<span class="built_in">NSIndexPath</span> *)indexPath;</span><br></pre></td></tr></table></figure>
+<p>一共有多少行，每一行的cell是什么样的。</p>
+<p>在绝大多数的VC里面，我们会看到类似这样的代码:</p>
+<figure class="highlight objc"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br></pre></td><td class="code"><pre><span class="line">- (<span class="built_in">NSInteger</span>)tableView:(<span class="built_in">UITableView</span> *)tableView numberOfRowsInSection:(<span class="built_in">NSInteger</span>)section &#123;</span><br><span class="line">	<span class="keyword">return</span> <span class="keyword">self</span>.dataArray.count;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line">- (<span class="built_in">UITableViewCell</span> *)tableView:(<span class="built_in">UITableView</span> *)tableView cellForRowAtIndexPath:(<span class="built_in">NSIndexPath</span> *)indexPath &#123;</span><br><span class="line">	<span class="built_in">UITableViewCell</span> * cell = [tableView dequeueReusableCellWithIdentifier:<span class="string">@"cellIdentifier"</span>];</span><br><span class="line">	Model * item = <span class="keyword">self</span>.dataArray[indexPath.row];</span><br><span class="line">	<span class="comment">// 用item去配置cell</span></span><br><span class="line">	...</span><br><span class="line"></span><br><span class="line">	<span class="keyword">return</span> cell;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<p>唯一会不同的，可能就是用item去配置cell这部分了。可以很明显的看出所有的UITableViewDataSource其实就是在围绕dataArray(也就是你的结果集)做文章，何不把这部分代码挪到单独的代码里去呢。</p>
+<p>于是很自然的抽象出一个对象，遵循UITableViewDataSource，实现其方法，并在此基础上封装便利的公共方法。</p>
+<p>KKTableViewDataSource便是这样一个对象，基本的思路和实现方式是参照上面提到的那篇<a href="http://objc.io" target="_blank" rel="noopener">objc.io</a>上的<a href="http://www.objc.io/issues/1-view-controllers/table-views/" target="_blank" rel="noopener">文章</a>。</p>
+<p>下面说说不一样的地方，那篇文章里所实现的dataSource只能处理单一类型cell的情况。一般来说，不同种类的cell会具有不同的identifier。而那篇文章里所实现的dataSource只能持有一个identifier。当然人家这只是写个Demo，重在阐述分离UITableViewDataSource的思想。所以剩下的工作当然是要靠我们自己去实践的。</p>
+<p>UITableView提供了这么一套流程:</p>
+<p>首先：</p>
+<figure class="highlight objc"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">- (<span class="keyword">void</span>)registerClass:(Class)cellClass forCellReuseIdentifier:(<span class="built_in">NSString</span> *)identifier;</span><br></pre></td></tr></table></figure>
+<p>注册cell的class到对应的identifier上（当然也可以在storyboard中填写该属性），之后你可以放心大胆的使用</p>
+<figure class="highlight objc"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">- (<span class="keyword">id</span>)dequeueReusableCellWithIdentifier:(<span class="built_in">NSString</span> *)identifier;</span><br></pre></td></tr></table></figure>
+<p>根据不同的identifier返回对应的cell。</p>
+<p>于是我们给抽象出来的dataSource加上一个cellIdentifier数组，在配置数据源时，我们将所有的cellIdentifier传给dataSource，然后dataSource在<code>cellForRowAtIndexPath</code>中根据不同的identifier返回对应的cell。</p>
+<p>接下来的问题在于如何处理identifier和indexPath之间的关系。其实identifier并不是和indexPath之间具有某种联系，它是和indexPath背后的item具有某种联系。通常，在item中会有某个属性（比如type）来决定它对应的cell是哪一种cell。于是问题就演化为如何让我们的dataSource知道item与identifier之间的关系。这种关系是与业务紧密相联的，于是只提供一个block，让业务端去表现这种联系。</p>
+<figure class="highlight objc"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">typedef</span> Class(^CellClassConfigureBlock)(<span class="keyword">id</span> item);</span><br><span class="line"></span><br><span class="line"><span class="class"><span class="keyword">@interface</span> <span class="title">KKTableViewDataSource</span> : <span class="title">NSObject</span>&lt;<span class="title">UITableViewDataSource</span>&gt;</span></span><br><span class="line">...</span><br><span class="line"></span><br><span class="line"><span class="keyword">@property</span> (<span class="keyword">nonatomic</span>, <span class="keyword">copy</span>) CellClassConfigureBlock cellClassConfigureBlock;</span><br><span class="line"></span><br><span class="line">...</span><br><span class="line"><span class="keyword">@end</span></span><br><span class="line"></span><br><span class="line">....</span><br><span class="line"></span><br><span class="line"><span class="comment">// 在VC中设置block，大概会是像这个样子：</span></span><br><span class="line"></span><br><span class="line"><span class="keyword">self</span>.dataSource.cellClassConfigureBlock = ^(Person *model) &#123;</span><br><span class="line">	<span class="keyword">if</span> (model.userno % <span class="number">3</span> == <span class="number">0</span>) &#123;</span><br><span class="line">		<span class="keyword">return</span> [RightCell <span class="keyword">class</span>];</span><br><span class="line">	&#125;</span><br><span class="line">	<span class="keyword">return</span> [PersonCell <span class="keyword">class</span>];</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<p>为什么这个block返回的是Class，这里我遵循了cell的identifier与className保持一致的约定。所以返回的是cell的Class还是直接是字符串类型的identifier都是一样的。<code>KKBaseCell</code>的<code>cellReuseIdentifier</code>类方法也就是做了这么一件事。当然可能这里返回一个<code>Class</code>会让人觉得很别扭，在后续的过程中，我会考虑将这里的返回值改为<code>NSString</code>。</p>
+<p>有了这些基础之后，我们就可以很容易的拿到正确的cell了，利用自己封装的结果集，我们也能够很容易的拿到正确的model，接下来的事情就是如何用model去配置cell。一般而言，这个配置的过程会封装在cell类当中，简单考虑，我们可以在cell的基类当中定义一个方法：</p>
+<figure class="highlight objc"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">- (<span class="keyword">void</span>)configureCellWithModel:(<span class="keyword">id</span>)model;</span><br></pre></td></tr></table></figure>
+<p>然后在各个子类当中去实现它。这样我们将model与cell之间的关系就简化了，甚至在我们抽象的dataSource中只要调用 <code>[cell configureCellWithModel:model]</code>就行了。外部的VC都完全不需要进行配置。</p>
+<p>理想是美好的，然而在实践过程中，还是有许多的意外。有一部分业务会导致cell与VC之间产生交互。一般会通过delegate或者block的形式来实现这一目标。所以还是需要业务方介入来对cell进行更为灵活的配置，在VC里给cell设置相应的delegate或者block。可以通过给dataSource设置一个<code>configureBlock</code>来实现：</p>
+<figure class="highlight objc"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">typedef</span> <span class="keyword">void</span>(^CellConfigureBlock)(<span class="keyword">id</span> cell, <span class="keyword">id</span> item);</span><br><span class="line"></span><br><span class="line"><span class="keyword">@property</span> (<span class="keyword">nonatomic</span>, <span class="keyword">copy</span>) CellConfigureBlock configureBlock;</span><br><span class="line"></span><br><span class="line"><span class="comment">// ViewController里设置cell的配置块</span></span><br><span class="line"><span class="keyword">self</span>.dataSource.configureBlock = ^(ShopListCell *cell, ShopModel *item) &#123;</span><br><span class="line">    [cell configureWithModel:item telClickBlock:block1];</span><br><span class="line">&#125;;</span><br></pre></td></tr></table></figure>
+<p>如果不同种的cell有不同的配置需求，也就是对应不同的配置块，那么可以通过：</p>
+<figure class="highlight objc"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">- (<span class="keyword">void</span>)registerConfigureBlock:(CellConfigureBlock)block forCellClassName:(<span class="built_in">NSString</span> *)className;</span><br></pre></td></tr></table></figure>
+<p>来给不同的cell注册不同的配置块。</p>
+<p>KKTableViewDataSource除了解决以上问题以外，还封装了一些常用的便利的方法，这些方法也是继承KKTableViewDataSource时需要考虑是否重写的方法。</p>
+<figure class="highlight objc"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">#pragma mark - 增、删数据源数组</span></span><br><span class="line">- (<span class="keyword">void</span>)addItem:(<span class="keyword">id</span>)item;</span><br><span class="line">- (<span class="keyword">void</span>)addItemsArray:(<span class="built_in">NSArray</span> *)items;</span><br><span class="line">- (<span class="keyword">void</span>)clearItems;</span><br><span class="line"></span><br><span class="line"><span class="meta">#pragma mark - 只读类方法</span></span><br><span class="line">- (<span class="built_in">NSString</span> *)cellIdentifierForIndexPath:(<span class="built_in">NSIndexPath</span> *)indexPath;</span><br><span class="line">- (CellConfigureBlock)cellConfigureBlockForIdentifier:(<span class="built_in">NSString</span> *)identifier;</span><br><span class="line">- (<span class="keyword">id</span>)itemAtIndexPath:(<span class="built_in">NSIndexPath</span> *)indexPath;</span><br><span class="line">- (<span class="built_in">NSArray</span> *)items;</span><br></pre></td></tr></table></figure>
+<p>KKTableViewDataSource将结果集对象隐藏在背后，因此当你的结果集需要从一个普通的NSMutableArray变换为CoreData或者其他的实现时，是很容易进行更改的。只需要继承KKTableViewDataSource，实现你的结果集就可以了，而业务方也就是ViewController里面不需要做什么更改。</p>
+<h2 id="包含TableView的ViewController"><a href="#包含TableView的ViewController" class="headerlink" title="包含TableView的ViewController"></a>包含TableView的ViewController</h2><p>仅仅有了一个封装后的dataSource还不够，我们再回过头来看看列表类的ViewController里面所包含的东西。一个UITableView，这是必须的。绝大多数的这种ViewController里面还会含有下拉刷新和上拉加载更多的控件，以及一个分页模型。</p>
+<p>不如把这些东西都打包进一个基类里面，<code>KKTableViewController</code>就是这么一个基类，里面有分页模型，有tableView，也有我们上面提到的dataSource。tableView自动拥有下拉刷新和上拉更多的特性，子类只需要实现<code>refresh</code>和<code>loadMore</code>这两个方法。其他需要子类实现的方法有:</p>
+<figure class="highlight objc"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">- (<span class="keyword">void</span>)configureTableView;</span><br></pre></td></tr></table></figure>
+<p>该方法需要实现tableVieww对cellClass的注册，其他的比如tableView的背景颜色，分割线样式等也可以在这里进行设置。</p>
+<figure class="highlight objc"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">- (<span class="keyword">void</span>)configureDataSource;</span><br></pre></td></tr></table></figure>
+<p>该方法需要实现dataSource的cellIdentifier和configureBlock的设置。</p>
+<p>别忘了在<code>viewDidLoad</code>中将父类的<code>tableView</code>加到<code>self.view</code>中。</p>
+<h2 id="已经是某个BaseViewController的子类"><a href="#已经是某个BaseViewController的子类" class="headerlink" title="已经是某个BaseViewController的子类"></a>已经是某个BaseViewController的子类</h2><p>如果是项目的基本架构早已经搭建完毕，甚至开发已经进行了一部分了，通常来说项目当中会有一个BaseViewController，其他的VC都从这派生而来。这时候你会发现上面提到的<code>KKTableViewController</code>并没有什么卵用。让BaseViewController从<code>KKTableViewController</code>继承不太现实，毕竟不是所有的ViewController都是有tableView的。</p>
+<p>没有多继承，protocol只能定义一堆空空的接口（绝对没有贬低protocol的意思，protocol大有用处，只不过在这里对我们封装ViewController并没有太大的帮助）。那么工作只能交给Category了。</p>
+<p><code>UIViewController+KKTableView</code>提供了上面所说<code>KKTableViewController</code>中绝大多数功能。但也需要protocol的帮助，将ViewController需要自己配合实现的方法放在了<code>KKTableViewControllerDelegate</code>这个protocol中，业务方按需实现。</p>
+<p>在实现过程中，并没有选择使用swizzling的方式去侵入ViewController的生命周期来实现自动初始化tableView和dataSource及相关配置。因为swizzling通常会放在<code>+load</code>中执行，并且影响整个应用级别的类行为，而我们这里并不希望所有的ViewController都莫名其妙多一个tableView。</p>
+<p>所以还是需要在ViewController里合适的位置，调用一下<code>[self kk_loadView]</code>来执行tableView和dataSource的初始化及基本配置。剩下要做的事情就跟KKTableViewController比较类似了。</p>
+<h2 id="TableView的自动算高"><a href="#TableView的自动算高" class="headerlink" title="TableView的自动算高"></a>TableView的自动算高</h2><p>在TableView的实践里，还有一件事情在大多数情况下会去做，就是实现<code>UITableViewDelegate</code>中的：</p>
+<figure class="highlight objc"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">- (<span class="built_in">CGFloat</span>)tableView:(<span class="built_in">UITableView</span> *)tableView heightForRowAtIndexPath:(<span class="built_in">NSIndexPath</span> *)indexPath;</span><br></pre></td></tr></table></figure>
+<p>没错，就是计算每一行的高度。</p>
+<p>在<code>KKTableViewController</code>和<code>UIViewController+KKTableView</code>中都实现了这个方法，并且能够适应大多数情况。这里的大多数情况指采用autolayout的方式设置cell里的子view位置，并且约束设置合理，能够撑得起来cell的contentView。</p>
+<p>实现的思路和方式是参考的<a href="https://github.com/forkingdog/UITableView-FDTemplateLayoutCell" target="_blank" rel="noopener">UITableView-FDTemplateLayoutCell</a>，不过并没有完全把它的代码引用过来，并没有实现它里面描述的利用Runloop预计算每一行的高度，也没有实现对frame layout的支持。相对的，<code>UITableView+KKLayoutCell</code>利用了<code>KKTableViewDataSource</code>中的一些方法来实现对高度的计算。会在今后的进一步实践后，考虑是否有必要引入<code>UITableView-FDTemplateLayoutCell</code>的预计算和支持frame layout的特性。</p>
+<h2 id="总结"><a href="#总结" class="headerlink" title="总结"></a>总结</h2><p>上面写了好长一篇的废话，主要介绍了在参考<a href="http://www.objc.io/issues/1-view-controllers/lighter-view-controllers/" target="_blank" rel="noopener">这篇文章</a>后所做的一些实践，以及实践的<a href="https://github.com/yiyangest/KKTableView" target="_blank" rel="noopener">成果</a>。在目前的工作中已经开始使用这个成果了，会进一步的结合工作及实践情况，对<a href="https://github.com/yiyangest/KKTableView" target="_blank" rel="noopener">KKTableView</a>进行不断完善和改进。</p>
+<p>最后总结一句：</p>
+<blockquote>
+<p>懒是推动人类进步的动力。</p>
+</blockquote>
+<p>因为懒，大家总结出各种各样的模式与框架，催生出了优秀的开源项目以及各式科技发明。可怕的不是懒，而是失掉了一颗积极进取的心。</p>
+</div></article></div></section><footer><div class="paginator"><a href="/2015/10/27/mvvm-in-ios-using-reactivecocoa/" class="prev">PREV</a></div><div data-thread-key="2015/08/05/lighter-view-controller-practice/" data-title="轻量级ViewController的实践" data-url="http://yiyangest.github.io/2015/08/05/lighter-view-controller-practice/" data-author-key="1" class="ds-thread"></div><script>var duoshuoQuery = {short_name:"yiyangest"};
+(function() {
+    var ds = document.createElement('script');
+    ds.type = 'text/javascript';ds.async = true;
+    ds.src = (document.location.protocol == 'https:' ? 'https:' : 'http:') + '//static.duoshuo.com/embed.js';
+    ds.charset = 'UTF-8';
+    (document.getElementsByTagName('head')[0] 
+     || document.getElementsByTagName('body')[0]).appendChild(ds);
+})();
 
-block site_title
-    != page.title + " · " + config.title
-
-block description
-    - desc = page.desc || page.title + ' - ' + config.author;
-    meta(name="description", content=desc)
-
-block container
-    include mixins/post
-    +post(page)
-
-block pagination
-    include mixins/paginator
-    +post()
-    include partial/comment
-
-block copyright
-    include partial/copyright
+</script><div class="copyright"><p>© 2016 - 2018 <a href="http://yiyangest.github.io">yiyangest</a>, unless otherwise noted.</p></div></footer></div><script src="//cdn.bootcss.com/mathjax/2.6.1/MathJax.js?config=TeX-MML-AM_CHTML"></script></body></html>

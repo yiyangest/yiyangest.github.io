@@ -1,20 +1,120 @@
-extends partial/layout
+<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="X-UA-Compatible" content="IE=edge"><title> Review Network Error · 深谷</title><meta name="description" content="有时候网络错误并没有想象中的简单"><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="short icon" href="/favicon.png"><link rel="stylesheet" href="/css/apollo.css"><link rel="stylesheet" href="http://fonts.useso.com/css?family=Source+Sans+Pro:400,600" type="text/css"></head><body><div class="wrap"><header><a href="/" class="logo-link"><img src="/favicon.png"></a><ul class="nav nav-list"><li class="nav-list-item"><a href="/" target="_self" class="nav-list-link">BLOG</a></li><li class="nav-list-item"><a href="/archives/" target="_self" class="nav-list-link">ARCHIVE</a></li><li class="nav-list-item"><a href="https://github.com/yiyangest" target="_blank" class="nav-list-link">GITHUB</a></li><li class="nav-list-item"><a href="/atom.xml" target="_self" class="nav-list-link">RSS</a></li></ul></header><section class="container"><div class="post"><article class="post-block"><h1 class="post-title">Review Network Error</h1><div class="post-time">2017年12月22日</div><div class="post-content"><h1 id="重新审视“网络连接错误”"><a href="#重新审视“网络连接错误”" class="headerlink" title="重新审视“网络连接错误”"></a>重新审视“网络连接错误”</h1><h2 id="前言"><a href="#前言" class="headerlink" title="前言"></a>前言</h2><p>最近在做项目的过程当中遇到了一件颇有启发性的事情，在此分享给大家。请注意这篇文章绝对不是干货，相反，非常的”湿”.</p>
+<h2 id="背景"><a href="#背景" class="headerlink" title="背景"></a>背景</h2><p>早在11月初的时候，做了很久的某直播项目终于提测了，屁颠颠的提测到QA那。过了没多久，QA同学招唤我，”YYY, 这个进直播间总是卡在80%进不去啊。提示加载失败。”</p>
+<p>“怎么可能，我写的代码怎么会有Bug, 肯定是你网不好吧”。</p>
+<p>为了证明我的清白(怕被自己打脸)，于是从神策上拉了日志，日志显示”信令SDK server can not connect”。松了一口气，不是我的锅。</p>
+<p>面对铁证如山，QA同学虽然很是怀疑，但是还是放过了我。作为一名有责任心的RD，为了进一步将问题明确(甩锅)，将信令连接失败的错误作为网络错误在弹窗上显示出来。</p>
+<p>随着测试过程的不断深入，发现了越来越多的Bug（???），进不去直播间的问题还是时有发生。于是信令同学细化了相关的日志以便排查问题。</p>
+<p>而我们在公司自测开发的过程当中，也出现了进直播间失败的情况。当时日志显示所有的ep节点都ping失败了。</p>
+<h2 id="进教室选点逻辑"><a href="#进教室选点逻辑" class="headerlink" title="进教室选点逻辑"></a>进教室选点逻辑</h2><p>这里先简单插入一下进直播间过程当中的选点逻辑。</p>
+<p>服务端会返回9个（目前是9个）EP节点的IP列表(含端口)。之后信令SDK会对每个IP开启一个线程，每个线程里串行的连续对该IP进行5次ping请求。</p>
+<p>每个ping请求实际上是访问了这个节点的一个HTTP服务。这个HTTP服务什么也没做，直接返回success给客户端。</p>
+<p>大概是长这个样子：<code>http://ip:port/ping?xxx=yyy</code>.</p>
+<p>目前端口都是8080。</p>
+<p>最后哪个IP的线程先执行完，那就代表哪个IP对客户端而言最优，于是会把这个IP作为后续流程的服务器。</p>
+<p><em>这里我们不去探究这个选点逻辑的优劣。感兴趣的同学可以自己设计一个选点策略。</em></p>
+<h2 id="问题"><a href="#问题" class="headerlink" title="问题"></a>问题</h2><p>现在日志很清晰的告诉你，9个ep节点，每个ep节点都ping失败，访问不通。小明，你怎么看？</p>
+<h3 id="答案一"><a href="#答案一" class="headerlink" title="答案一"></a>答案一</h3><p>是不是当时网断了，网络情况很差。一开始我想当然的也是这么认为。</p>
+<p>可是ep选点之前还要经过其他好多接口，其他接口访问都没事。那证明网络是好的，并没有问题。</p>
+<h3 id="答案二"><a href="#答案二" class="headerlink" title="答案二"></a>答案二</h3><p>那会不会是服务端挂了。</p>
+<p>一共9台服务器，都挂的概率也太低了吧，而且当时老师端是能进去的，也是同样的网络与选点策略。</p>
+<h3 id="答案三"><a href="#答案三" class="headerlink" title="答案三"></a>答案三</h3><p>会不会是信令SDK存在什么bug，在某种情况下会导致网络请求发不出去。</p>
+<p>嗯。你的怀疑很有道理，但是证据呢？</p>
+<h3 id="答案四"><a href="#答案四" class="headerlink" title="答案四"></a>答案四</h3><p>会不会是iOS系统有什么连接数限制，同一时间发起这么多请求，触到了系统的禁忌之地？</p>
+<p>嗯。想想也是相当有道理。怎么验证？</p>
+<h3 id="答案五"><a href="#答案五" class="headerlink" title="答案五"></a>答案五</h3><p>由于ping服务是HTTP服务，且使用了一个非常规端口：8080。那有没有可能是端口被封呢？</p>
+<p>在某些网络环境下的确有可能。不过多数情况下，在我们的公司网络下访问是没有问题的。</p>
+<p>那总不会是当一些特定情况下会把8080端口封了，而大多数情况下又恢复了呢？可能性比较低，但也不能完全否定。</p>
+<h2 id="找证据"><a href="#找证据" class="headerlink" title="找证据"></a>找证据</h2><p>前面答案一和答案二经不起推敲，后面两个答案初步审视感觉有点靠谱，但怎么验证呢？</p>
+<p>答案四提到的连接数限制，印象中之前看过一篇文章提到过移动设备上的网络连接数限制。</p>
+<p>后来一顿疯狂搜索之后得出的结论是: <em>对同一Host下的网络请求会限制并发连接数，并且这个数与iOS版本及当时的网络情况(2G/3G/WIFI)有关系</em>.</p>
+<p>查了官方文档，虽然没有明确的这种结论，但是<code>NSURLSessionConfiguration</code>里的<code>HTTPMaximumConnectionsPerHost</code>还是可以大致推断刚才那个结论应该是正确的。</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line">Declaration</span><br><span class="line"></span><br><span class="line">@property NSInteger HTTPMaximumConnectionsPerHost;</span><br><span class="line"></span><br><span class="line">Discussion</span><br><span class="line"></span><br><span class="line">This property determines the maximum number of simultaneous connections</span><br><span class="line">made to each host by tasks within sessions based on this configuration.</span><br><span class="line"></span><br><span class="line">This limit is per session, so if you use multiple sessions,</span><br><span class="line">your app as a whole may exceed this limit.</span><br><span class="line">Additionally, depending on your connection to the Internet,</span><br><span class="line">a session may use a lower limit than the one you specify.</span><br><span class="line"></span><br><span class="line">The default value is 6 in macOS, or 4 in iOS.</span><br></pre></td></tr></table></figure>
+<p>可是细想之下，9个EP节点，每个的HOST都是不同的啊，并不符合这里提到的同一host的连接数限制。难道不同的host也会有一个最大连接数的潜规则吗？</p>
+<p>案件到这里感觉得不到更多有价值的线索了。难道又要成为一桩悬案了吗？</p>
+<p>再怎么如何在网上去搜索你想要的答案，不如自己动手来验证一下。</p>
+<p>既然涉及网络，那就抓包吧。这里不详细介绍如何抓包，大家感兴趣可以看以下几篇文章：</p>
+<ul>
+<li><p><a href="https://zhuanlan.zhihu.com/p/23377655?refer=mrpeak" target="_blank" rel="noopener">iOS,Android网络抓包教程之tcpdump</a></p>
+</li>
+<li><p><a href="http://www.jianshu.com/p/bcf6d15ee950" target="_blank" rel="noopener">iOS抓包工具之tcpdump</a></p>
+</li>
+</ul>
+<p>P.S. 信令SDK用C++编写，采用curl去做网络请求，用charles抓不到，有知道内情的同学可以分享一下～</p>
+<p>在疯狂进出教室几百次之后，终于让我很幸运的复现了一次进教室失败。于是用颤抖的双手点开了Wireshark，来见一见这位谜一样的女子揭下神秘面纱后的样子吧：</p>
+<p><img src="tcpdump.jpeg" alt="TCP dump"></p>
+<p>WTF??&amp;#$&amp;#&amp;?喵了个咪？这些都是什么鬼？打码了吗？？</p>
+<h3 id="三次握手"><a href="#三次握手" class="headerlink" title="三次握手"></a>三次握手</h3><p>同学们，请翻到教材“计算机网络”的第xx页，这是重点，要考的哦。</p>
+<p>“啪叽”,一个板擦砸中了我骄傲的后脑勺。”YYY，快下课了你还睡！”。</p>
+<p>好了，同学们，让我们来了解一下TCP连接的建立过程吧。</p>
+<hr>
+<p>C –SYN–&gt; S</p>
+<p>S –SYN, ACK–&gt; C</p>
+<p>C –ACK–&gt; S</p>
+<hr>
+<ul>
+<li>主动发起连接的一方会发送一个SYN标记的包到目标IP</li>
+<li>目标IP收到该SYN的包之后，会发送一个ACK的包回给主动连接方</li>
+<li>主动连接方收到目标机的ACK包之后，会再发送一个ACK到目标IP</li>
+</ul>
+<p>于是双方的连接就此建立。</p>
+<p>通俗一点的表示：</p>
+<ul>
+<li>A对B说，我好稀饭你，你可以做我女票嘛</li>
+<li>B听见之后对A说，讨厌，其实我也稀饭你</li>
+<li>A听后大喜，对B说，好啊好啊，从今以后你就是我女票了</li>
+</ul>
+<p>于是A和B之后就在一起了。</p>
+<h3 id="HTTP请求"><a href="#HTTP请求" class="headerlink" title="HTTP请求"></a>HTTP请求</h3><p>我们知道HTTP请求实际上是建立在TCP连接之上的。在不考虑连接复用的前提下，实际上每次HTTP请求的初始阶段都要经历TCP的三次握手。下面这个图可以很清楚的看到HTTP请求建立连接阶段的三次握手，以及最后关闭连接时的四次挥手。</p>
+<p><img src="http.jpeg" alt="http请求"></p>
+<p>抽丝剥茧，我们在一大堆的TCP包里面，找到了返回ep节点列表的HTTP响应。将其中的ep节点列表提取出来，作为过滤条件，将所有ep节点相关的请求都过滤出来。</p>
+<p>结果发现了这样一个人间悲剧:</p>
+<p><img src="tcpretransimission.jpeg" alt="超时重传"></p>
+<p>真的向9个节点分别都请求建立连接，但是9个节点竟然都不给我回应，导致出现了TCP包的超时重传<code>Retrainsmission</code>。</p>
+<p>(可以观察到，在iOS上，TCP包的超时重传头几次基本上是一秒一次。而在电脑上基本是按指数级别递增的).</p>
+<p>随后一直超时重传最终触发了信令SDK里的超时逻辑，重新去请求进教室接口获取ep节点，并重新ping这些ep节点。不幸的是，这之后的尝试依然失败。</p>
+<h3 id="案发现场"><a href="#案发现场" class="headerlink" title="案发现场"></a>案发现场</h3><p>经过上述的追查，总算能基本上将案发现场还原了，信令SDK获取到了ep节点列表，并正确的发起了9个请求去尝试连接这9个ep节点。但是这9个ep节点都没有回应。</p>
+<p>这里引发TCP包的超时重传的直接原因就是: <em>客户端发起了SYN包，但是一直未能收到ACK包，因此客户端尝试重新发送SYN包</em>.</p>
+<p>同时我们也能观察到，在尝试和ep节点建立连接的过程当中，有其他请求的TCP连接是正常工作的，能正常的收发包。<em>因此当下客户端的网络是好的，也并没有受到连接数的限制</em>.</p>
+<h3 id="可能的结案"><a href="#可能的结案" class="headerlink" title="可能的结案"></a>可能的结案</h3><p>请求确实发出了，但是没连上。而客户端网络又没有问题。带着这强烈的好奇心，搜索了一下。结果发现还真有一些结论符合我们的现象。</p>
+<blockquote>
+<p>服务端系统内核中开启了<code>tcp_tw_recycle</code>，当多个客户端使用同一个外网IP，连接到服务端，60s内发来的connect请求中时间戳必须是递增的，否则较老时间戳的包会被视为老包丢弃。</p>
+</blockquote>
+<h4 id="tcp-tw-recycle"><a href="#tcp-tw-recycle" class="headerlink" title="tcp_tw_recycle"></a>tcp_tw_recycle</h4><p>这个东东是做什么的呢？</p>
+<p>长话短说，主动关闭TCP连接的一方，会在四次挥手之后进入TIME_WAIT状态。这个状态会等待2个MSL的时间，大约是几分钟，这个连接才会真正被关闭。这段时间内这个连接是不能被回收的。期间如果要建立新连接，只能启用一个新的端口。如果短时间内有大量的连接，很有可能导致端口被耗尽。不过值得注意的是，TIME_WAIT状态只会出现在主动关闭TCP连接的一方。</p>
+<p>为什么是2个MSL时间呢，MSL是指段最大生存时间，或者说报文最大生存时间，他是任何报文在网络上能存在的最长时间，超过这个时间报文就会被丢弃。在主动关闭连接的一方最后一次挥手发出ACK后，对方如果没有收到最后这次ACK，对方还会重发一次第三次挥手的FIN包，这时候主动关闭连接的一方还可以重发一次第四次挥手的ACK包。等待2个MSL的时间可以保证对方如果有包迟到，本方也不可能再接到这个迟到的包了，这时候复用连接的端口就不会有冲突了。</p>
+<p>系统内核中的<code>tcp_tw_recycle</code>就是用来加快这种连接的回收。开启的情况下允许协议在2个RTT的时间内就可以进行连接回收。这样的好处是加快连接的复用。<br>同时内核中是这样处理SYN包的：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">#<span class="meta-keyword">define</span> TCP_PAWS_MSL    60      <span class="comment">/* Per-host timestamps are invalidated</span></span></span><br><span class="line"><span class="meta"><span class="comment">                     * after this time. It should be equal</span></span></span><br><span class="line"><span class="meta"><span class="comment">                     * (or greater than) TCP_TIMEWAIT_LEN</span></span></span><br><span class="line"><span class="meta"><span class="comment">                     * to provide reliability equal to one</span></span></span><br><span class="line"><span class="meta"><span class="comment">                     * provided by timewait state.</span></span></span><br><span class="line"><span class="meta"><span class="comment">                     */</span></span></span><br><span class="line"><span class="meta">#<span class="meta-keyword">define</span> TCP_PAWS_WINDOW 1       <span class="comment">/* Replay window for per-host</span></span></span><br><span class="line"><span class="meta"><span class="comment">                     * timestamps. It must be less than</span></span></span><br><span class="line"><span class="meta"><span class="comment">                     * minimal timewait lifetime.</span></span></span><br><span class="line"><span class="meta"><span class="comment"></span></span></span><br><span class="line"><span class="meta"><span class="comment"></span></span></span><br><span class="line"><span class="meta"><span class="comment">        /* VJ's idea. We save last timestamp seen</span></span></span><br><span class="line"><span class="meta"><span class="comment">         * from the destination in peer table, when entering</span></span></span><br><span class="line"><span class="meta"><span class="comment">         * state TIME-WAIT, and check against it before</span></span></span><br><span class="line"><span class="meta"><span class="comment">         * accepting new connection request.</span></span></span><br><span class="line"><span class="meta"><span class="comment">         *</span></span></span><br><span class="line"><span class="meta"><span class="comment">         * If "isn" is not zero, this request hit alive</span></span></span><br><span class="line"><span class="meta"><span class="comment">         * timewait bucket, so that all the necessary checks</span></span></span><br><span class="line"><span class="meta"><span class="comment">         * are made in the function processing timewait state.</span></span></span><br><span class="line"><span class="meta"><span class="comment">         */</span></span></span><br><span class="line">        <span class="keyword">if</span> (tmp_opt.saw_tstamp &amp;&amp;</span><br><span class="line">            tcp_death_row.sysctl_tw_recycle &amp;&amp;</span><br><span class="line">            (dst = inet_csk_route_req(sk, &amp;fl4, req)) != <span class="literal">NULL</span> &amp;&amp;</span><br><span class="line">            fl4.daddr == saddr &amp;&amp;</span><br><span class="line">            (peer = rt_get_peer((struct rtable *)dst, fl4.daddr)) != <span class="literal">NULL</span>) &#123;</span><br><span class="line">            inet_peer_refcheck(peer);</span><br><span class="line">            <span class="keyword">if</span> ((u32)get_seconds() - peer-&gt;tcp_ts_stamp &lt; TCP_PAWS_MSL &amp;&amp;</span><br><span class="line">                (s32)(peer-&gt;tcp_ts - req-&gt;ts_recent) &gt;</span><br><span class="line">                            TCP_PAWS_WINDOW) &#123;</span><br><span class="line">                NET_INC_STATS_BH(sock_net(sk), LINUX_MIB_PAWSPASSIVEREJECTED);</span><br><span class="line">                <span class="keyword">goto</span> drop_and_release;</span><br><span class="line">            &#125;</span><br><span class="line">        &#125;</span><br></pre></td></tr></table></figure>
+<p>可以看到当满足下面所有的条件时，这个SYN包将会被丢弃，然后释放相关内存。</p>
+<ol>
+<li>tcp的option有 time stamp字段.</li>
+<li>tcp_tw_recycle有设置。</li>
+<li>在路由表中是否存在完全相同的流，如果存在则直接返回.</li>
+<li>并且数据包的源地址和新请求的源地址相同.</li>
+<li>根据路由表以及源地址能够查找到保存的peer.</li>
+<li>当前时间(接收到SYN)比最后一次的时间(time stamp)小于60秒.</li>
+<li>已经存在peer的最近一次时间戳要大于当前请求进来的时间戳.</li>
+</ol>
+<p>时间戳是怎么得来的呢？回顾一下我们上面的抓包截图，可以看到在SYN包的后面会有一项<code>TSVal</code>，这个就是代码里用到的时间戳。也可以观察到这个时间戳并不是一个unix时间戳，实际上是CPU的启动时间。因此这个时间戳只能保证这一次连接过程中包的时间顺序，而不能保证多个连接之间的时间顺序。</p>
+<p>我们再来回顾一下我们遇到的网络问题。看是否能对上这个结论</p>
+<ul>
+<li>我们使用公司的办公网络，出口IP很大概率是同一个。</li>
+<li>有一次复现的现象是，郭老师一登老师端，之后我再使用iPad进入教室就会一直ping失败。无论是切课还是重新进教室。直到稍微过一会儿再进就OK。</li>
+</ul>
+<p>简单分析一下：</p>
+<p>我们使用了同一个IP连接到服务端，老师端先和服务端连接上了，之后学生紧接着也尝试和服务端建立连接，这时候服务端发现来一个比之前的时间戳更老的包，于是认为这是一个老包，将之丢弃。</p>
+<p>客户端一直没有收到ACK，于是超时重传，更进一步的，触发了信令SDK的超时逻辑。</p>
+<p>感觉已经很接近事情的真相了，当然目前服务端的同学还在尝试进一步验证这个结论。</p>
+<h2 id="心得"><a href="#心得" class="headerlink" title="心得"></a>心得</h2><p>无论最终这次进教室失败表面看来的网络错误，背后的真因究竟如何。我自己还是从这次事件中感受良多。</p>
+<p>网络问题我们总是遇到，但大多数情况下可能我们只是简单的认为网不好，之后就不了了之。其实很有可能背后隐藏了很多东西，如果细细发掘一下，会有不少的收获。</p>
+<p>不光网络问题，当有一个看似非常简单浅显的问题抛出来的时候，我们还是应该多想想，有没有可能并没有我们想的那么简单。</p>
+</div></article></div></section><footer><div class="paginator"><a href="/2018/02/27/hello-world/" class="prev">PREV</a><a href="/2016/06/17/when-swift-generic-inheritance-meets-nsobject/" class="next">NEXT</a></div><div data-thread-key="2017/12/22/review-network-error/" data-title="Review Network Error" data-url="http://yiyangest.github.io/2017/12/22/review-network-error/" data-author-key="1" class="ds-thread"></div><script>var duoshuoQuery = {short_name:"yiyangest"};
+(function() {
+    var ds = document.createElement('script');
+    ds.type = 'text/javascript';ds.async = true;
+    ds.src = (document.location.protocol == 'https:' ? 'https:' : 'http:') + '//static.duoshuo.com/embed.js';
+    ds.charset = 'UTF-8';
+    (document.getElementsByTagName('head')[0] 
+     || document.getElementsByTagName('body')[0]).appendChild(ds);
+})();
 
-block site_title
-    != page.title + " · " + config.title
-
-block description
-    - desc = page.desc || page.title + ' - ' + config.author;
-    meta(name="description", content=desc)
-
-block container
-    include mixins/post
-    +post(page)
-
-block pagination
-    include mixins/paginator
-    +post()
-    include partial/comment
-
-block copyright
-    include partial/copyright
+</script><div class="copyright"><p>© 2016 - 2018 <a href="http://yiyangest.github.io">yiyangest</a>, unless otherwise noted.</p></div></footer></div><script src="//cdn.bootcss.com/mathjax/2.6.1/MathJax.js?config=TeX-MML-AM_CHTML"></script></body></html>
